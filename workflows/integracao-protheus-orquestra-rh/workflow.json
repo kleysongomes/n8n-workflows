@@ -1,0 +1,494 @@
+{
+  "name": "Integração RH_NF (Event Driven + Auth)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "iniciar-processamento-rh",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook (Start)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        220,
+        340
+      ],
+      "notes": "Recebe o sinal do Front"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.protheus.exemplo.com/api/oauth2/v1/token",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "grant_type",
+              "value": "password"
+            },
+            {
+              "name": "username",
+              "value": "INSERT_USERNAME_HERE"
+            },
+            {
+              "name": "password",
+              "value": "INSERT_PASSWORD_HERE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-token",
+      "name": "Auth Protheus (Get Token)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        440,
+        340
+      ],
+      "notes": "Pega o token UMA VEZ antes de começar o loop"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * \nFROM tabela_fila_rh \nWHERE status_integracao = 'PENDENTE'\nORDER BY id ASC\nLIMIT 50;",
+        "options": {}
+      },
+      "id": "read-db",
+      "name": "Ler Fila Pendente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        660,
+        340
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres Banco"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "Loop (Item a Item)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        880,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE tabela_fila_rh \nSET status_integracao = 'PROCESSANDO', data_processamento = NOW()\nWHERE id = {{ $json.id }};",
+        "options": {}
+      },
+      "id": "update-processing",
+      "name": "Marcar: Processando",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        340
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres Banco"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.protheus.exemplo.com/nf-entrada",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Auth Protheus (Get Token)').first().json.access_token }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "empresa",
+              "value": "={{ $json.nome_empresa }}"
+            },
+            {
+              "name": "cnpj_fornecedor",
+              "value": "={{ $json.cnpj }}"
+            },
+            {
+              "name": "valor",
+              "value": "={{ $json.valor }}"
+            },
+            {
+              "name": "numero_nota",
+              "value": "={{ $json.nr_nota }}"
+            },
+            {
+              "name": "arquivo_base64",
+              "value": "={{ $json.content }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "http-protheus",
+      "name": "API Protheus",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1320,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.statusCode }}",
+              "operation": "equal",
+              "value2": 200
+            },
+            {
+              "value1": "={{ $json.statusCode }}",
+              "operation": "equal",
+              "value2": 201
+            }
+          ]
+        }
+      },
+      "id": "check-protheus",
+      "name": "Protheus OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE tabela_fila_rh \nSET status_protheus = 'SUCESSO', codigo_pedido = '{{ $json.body.id_pedido }}'\nWHERE id = {{ $('Loop (Item a Item)').item.json.id }};",
+        "options": {}
+      },
+      "id": "update-protheus-success",
+      "name": "DB: Protheus Sucesso",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        240
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres Banco"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE tabela_fila_rh \nSET status_integracao = 'ERRO', \n    status_protheus = 'ERRO', \n    log_erro = 'Falha Protheus: {{ JSON.stringify($json.body).substring(0, 500) }}'\nWHERE id = {{ $('Loop (Item a Item)').item.json.id }};",
+        "options": {}
+      },
+      "id": "update-protheus-fail",
+      "name": "DB: Protheus Falha",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        500
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres Banco"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.orquestra.exemplo.com/start-process",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "cod_pedido_protheus",
+              "value": "={{ $json.body.id_pedido }}"
+            },
+            {
+              "name": "id_referencia_rh",
+              "value": "={{ $('Loop (Item a Item)').item.json.id }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "http-orquestra",
+      "name": "API Orquestra",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1980,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.statusCode }}",
+              "operation": "equal",
+              "value2": 200
+            },
+            {
+              "value1": "={{ $json.statusCode }}",
+              "operation": "equal",
+              "value2": 201
+            }
+          ]
+        }
+      },
+      "id": "check-orquestra",
+      "name": "Orquestra OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE tabela_fila_rh \nSET status_integracao = 'INTEGRADO', status_orquestra = 'SUCESSO'\nWHERE id = {{ $('Loop (Item a Item)').item.json.id }};",
+        "options": {}
+      },
+      "id": "update-final-success",
+      "name": "DB: Finalizado",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        140
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres Banco"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE tabela_fila_rh \nSET status_integracao = 'ERRO', \n    status_orquestra = 'ERRO', \n    log_erro = 'Protheus OK, mas Falha Orquestra: {{ JSON.stringify($json.body).substring(0, 500) }}'\nWHERE id = {{ $('Loop (Item a Item)').item.json.id }};",
+        "options": {}
+      },
+      "id": "update-orquestra-fail",
+      "name": "DB: Orquestra Falha",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        360
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POSTGRES_CREDENTIAL_ID",
+          "name": "Postgres Banco"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook (Start)": {
+      "main": [
+        [
+          {
+            "node": "Auth Protheus (Get Token)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth Protheus (Get Token)": {
+      "main": [
+        [
+          {
+            "node": "Ler Fila Pendente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Fila Pendente": {
+      "main": [
+        [
+          {
+            "node": "Loop (Item a Item)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop (Item a Item)": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Marcar: Processando",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar: Processando": {
+      "main": [
+        [
+          {
+            "node": "API Protheus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Protheus": {
+      "main": [
+        [
+          {
+            "node": "Protheus OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Protheus OK?": {
+      "main": [
+        [
+          {
+            "node": "DB: Protheus Sucesso",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB: Protheus Falha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB: Protheus Sucesso": {
+      "main": [
+        [
+          {
+            "node": "API Orquestra",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB: Protheus Falha": {
+      "main": [
+        [
+          {
+            "node": "Loop (Item a Item)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Orquestra": {
+      "main": [
+        [
+          {
+            "node": "Orquestra OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orquestra OK?": {
+      "main": [
+        [
+          {
+            "node": "DB: Finalizado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB: Orquestra Falha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB: Finalizado": {
+      "main": [
+        [
+          {
+            "node": "Loop (Item a Item)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB: Orquestra Falha": {
+      "main": [
+        [
+          {
+            "node": "Loop (Item a Item)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

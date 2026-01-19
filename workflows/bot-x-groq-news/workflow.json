@@ -1,0 +1,296 @@
+{
+  "name": "Bot X - AI News & Interaction",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "llama-3.3-70b-versatile"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [\n  { \n    \"role\": \"system\", \n    \"content\": \"Você é um dev influencer no Twitter. Sua tarefa muda a cada vez.\\n\\nOBJETIVO ATUAL: \" + ($json.subType === 'joke' ? 'Conte uma PIADA curta, irônica ou situação engraçada sobre vida de programador (bugs, café, deploy, gerentes). Seja engraçado.' : $json.subType === 'fact' ? 'Conte uma CURIOSIDADE técnica ou histórica fascinante e pouco conhecida sobre computação. (Ex: Ada Lovelace, Doom rodando em tudo, primeiro bug).' : 'Faça uma PERGUNTA engajadora e curta para devs responderem. Algo polêmico ou sobre rotina.') + \"\\n\\nEstilo: Natural, humano, curto. Máximo 150 caracteres. SEM HASHTAGS.\" \n  },\n  { \n    \"role\": \"user\", \n    \"content\": \"Gere o tweet agora seguindo o objetivo.\" \n  }\n] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "gen-interaction",
+      "name": "IA: Criar Interação",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        528,
+        320
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "GROQ_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.choices[0].message.content }}",
+        "additionalFields": {}
+      },
+      "id": "post-interaction",
+      "name": "Postar Interação",
+      "type": "n8n-nodes-base.twitter",
+      "typeVersion": 2,
+      "position": [
+        752,
+        320
+      ],
+      "credentials": {
+        "twitterOAuth2Api": {
+          "id": "TWITTER_CREDENTIAL_ID",
+          "name": "X account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "A cada 2h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -192,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// CONFIGURAÇÃO\nconst feeds = [\n  'https://www.tabnews.com.br/recentes/rss',\n  'https://dev.to/feed',\n  'https://techcrunch.com/feed/'\n];\n\n// 1. DECIDE: É NOTÍCIA OU INTERAÇÃO? (60% Interação)\nconst isInteractive = Math.random() < 0.6;\n\nif (isInteractive) {\n  // 2. SE FOR INTERAÇÃO, QUAL TIPO? (Sorteio Igualitário)\n  const types = ['question', 'joke', 'fact'];\n  const selectedType = types[Math.floor(Math.random() * types.length)];\n  \n  return [{ json: { mode: 'interactive', subType: selectedType, feedUrl: '' } }];\n} else {\n  // É NOTÍCIA\n  const randomFeed = feeds[Math.floor(Math.random() * feeds.length)];\n  return [{ json: { mode: 'news', subType: 'news', feedUrl: randomFeed } }];\n}"
+      },
+      "id": "brain-decider",
+      "name": "Cérebro (Decisor)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "condition-news",
+              "leftValue": "={{ $json.mode }}",
+              "rightValue": "news",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-is-news",
+      "name": "É Notícia?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        256,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Cérebro (Decisor)').item.json.feedUrl }}",
+        "options": {}
+      },
+      "id": "read-rss",
+      "name": "Ler RSS Aleatório",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        528,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lógica Anti-Repetição\nconst staticData = $getWorkflowStaticData('global');\nconst lastPostId = staticData.lastPostId;\nconst latestItem = $input.first().json;\n\nif (latestItem.guid === lastPostId || latestItem.link === lastPostId) {\n  return []; \n}\n\nstaticData.lastPostId = latestItem.guid || latestItem.link;\nreturn [ { json: latestItem } ];"
+      },
+      "id": "filter-duplicates",
+      "name": "Filtrar Repetidos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "llama-3.3-70b-versatile"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [\n  { \"role\": \"system\", \"content\": \"Você é um dev sênior irônico e inteligente no Twitter. Resuma a notícia para devs. Max 200 chars. Use 1 hashtag.\" },\n  { \"role\": \"user\", \"content\": $json.title + \" - \" + $json.contentSnippet }\n] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "gen-summary",
+      "name": "IA: Resumir Notícia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        976,
+        0
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "GROQ_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.choices[0].message.content }}\n\n{{ $('Filtrar Repetidos').item.json.link }}",
+        "additionalFields": {}
+      },
+      "id": "post-news",
+      "name": "Postar News (+Link)",
+      "type": "n8n-nodes-base.twitter",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ],
+      "credentials": {
+        "twitterOAuth2Api": {
+          "id": "TWITTER_CREDENTIAL_ID",
+          "name": "X account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "IA: Criar Interação": {
+      "main": [
+        [
+          {
+            "node": "Postar Interação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "A cada 2h": {
+      "main": [
+        [
+          {
+            "node": "Cérebro (Decisor)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cérebro (Decisor)": {
+      "main": [
+        [
+          {
+            "node": "É Notícia?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É Notícia?": {
+      "main": [
+        [
+          {
+            "node": "Ler RSS Aleatório",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IA: Criar Interação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler RSS Aleatório": {
+      "main": [
+        [
+          {
+            "node": "Filtrar Repetidos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar Repetidos": {
+      "main": [
+        [
+          {
+            "node": "IA: Resumir Notícia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IA: Resumir Notícia": {
+      "main": [
+        [
+          {
+            "node": "Postar News (+Link)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

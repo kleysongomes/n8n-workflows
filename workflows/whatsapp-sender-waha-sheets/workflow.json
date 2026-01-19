@@ -1,0 +1,368 @@
+{
+  "name": "Whatsapp Sender - Waha & Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Todo dia às 08h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        2280,
+        -380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define dia da semana em PT-BR (Sem acentos)\nconst diasSemana = ['Domingo', 'Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado'];\nconst hoje = new Date();\nconst diaTexto = diasSemana[hoje.getDay()];\n\nreturn [{ json: { hoje_eh: diaTexto } }];"
+      },
+      "id": "get-date",
+      "name": "Que dia é hoje?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        -380
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "INSERT_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "lista_contatos",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "read-sheets",
+      "name": "Ler Planilha",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2720,
+        -380
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "⚠️ SELECIONE SUA PLANILHA AQUI"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pega o dia de hoje calculado no nó anterior\nconst hojeRaw = $('Que dia é hoje?').first().json.hoje_eh;\nconst hoje = hojeRaw ? hojeRaw.toString().toLowerCase() : '';\n\n// Loop manual para garantir que todos os itens sejam processados sem quebrar no primeiro erro\nconst resultados = [];\n\nfor (const item of items) {\n  try {\n    // CORREÇÃO: Usando 'Dia_Envio' conforme sua planilha nova\n    const diaEnvio = item.json.Dia_Envio ? item.json.Dia_Envio.toString().toLowerCase() : '';\n    const ativo = item.json.Ativo;\n    \n    // Lógica para 'Ativo'\n    let isAtivo = false;\n    if (ativo === true) isAtivo = true;\n    if (typeof ativo === 'string' && ['TRUE', 'SIM', 'S', 'YES'].includes(ativo.toUpperCase().trim())) isAtivo = true;\n\n    if (isAtivo) {\n      // Verifica o dia\n      if (diaEnvio === 'todos' || diaEnvio === hoje) {\n        resultados.push(item);\n      }\n    }\n  } catch (error) {\n    // Se der erro neste item, ignora e vai pro proximo\n    console.log('Erro ao processar item:', error);\n  }\n}\n\nreturn resultados;"
+      },
+      "id": "filter-logic",
+      "name": "Filtro Lógico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2940,
+        -380
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-batch",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        3160,
+        -380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://your-waha-instance:3000/api/contacts/check-exists",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Api-Key",
+              "value": "INSERT_WAHA_API_KEY"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "phone",
+              "value": "={{ $json.Telefone }}"
+            },
+            {
+              "name": "session",
+              "value": "default"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-number",
+      "name": "Verificar Número",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        3380,
+        -380
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "maxTries": 2,
+      "onError": "continueRegularOutput",
+      "notes": "Continua mesmo se der erro (pula p/ IF)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.numberExists }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-valid",
+      "name": "Numero Valido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        3600,
+        -380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "llama-3.3-70b-versatile"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [\n  { \n    \"role\": \"system\", \n    \"content\": \"Sua função é REESCREVER mensagens de WhatsApp mantendo a ESTRUTURA VISUAL E FORMATAÇÃO.\\n\\nREGRAS DE FORMATAÇÃO (IMPORTANTE):\\n1. Se a mensagem original tiver listas, tópicos ou quebras de linha, VOCÊ DEVE MANTER ESSA ESTRUTURA. Não transforme tudo em um parágrafo só.\\n2. Use negrito (*texto*) para destacar títulos ou nomes importantes, igual ao original.\\n3. Use quebras de linha claras entre seções.\\n\\nREGRAS DE CONTEÚDO:\\n1. Use sinônimos leves para variar, mas mantenha o sentido.\\n2. PROIBIDO INVENTAR FATOS.\\n3. O tom deve ser natural e carinhoso.\\n\\nExemplo de Saída Esperada:\\n🙏 *Lista de Oração Renovada*\\n\\n📖 *Estudos Bíblicos:* João, Maria e José.\\n\\n🛡️ *Pedidos Especiais:* Família Silva e Pedro.\\n\\n(Note que as quebras de linha e o negrito foram mantidos).\"\n  },\n  { \n    \"role\": \"user\", \n    \"content\": \"Mensagem Original para Reescrever (Mantenha a formatação): \" + $('Split In Batches').item.json.Mensagem_Base\n  }\n] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "groq-ai",
+      "name": "IA: Criar Texto",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        3820,
+        -500
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "GROQ_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://your-waha-instance:3000/api/sendText",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Api-Key",
+              "value": "INSERT_WAHA_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chatId",
+              "value": "={{ $('Verificar Número').item.json.chatId }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.choices[0].message.content }}"
+            },
+            {
+              "name": "session",
+              "value": "default"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "send-waha",
+      "name": "Enviar Waha",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        4040,
+        -500
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "minutes"
+      },
+      "id": "wait-node",
+      "name": "Esperar 1min",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        4260,
+        -380
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Todo dia às 08h": {
+      "main": [
+        [
+          {
+            "node": "Que dia é hoje?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Que dia é hoje?": {
+      "main": [
+        [
+          {
+            "node": "Ler Planilha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler Planilha": {
+      "main": [
+        [
+          {
+            "node": "Filtro Lógico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtro Lógico": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Verificar Número",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar Número": {
+      "main": [
+        [
+          {
+            "node": "Numero Valido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Numero Valido?": {
+      "main": [
+        [
+          {
+            "node": "IA: Criar Texto",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Esperar 1min",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IA: Criar Texto": {
+      "main": [
+        [
+          {
+            "node": "Enviar Waha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Waha": {
+      "main": [
+        [
+          {
+            "node": "Esperar 1min",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Esperar 1min": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
